@@ -204,3 +204,16 @@ Resources:
       LogGroupName: /lambda/websocket-lambdas
       RetentionInDays: 7
 
+Outputs:
+  WebSocketApiId:
+    Description: WebSocket API ID
+    Value: !Ref WebSocketApi
+
+  WebSocketApiEndpoint:
+    Description: WebSocket API Endpoint URL
+    Value: !Sub "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${WebSocketStage}"
+
+  WebSocketApiArn:
+    Description: WebSocket API ARN
+    Value: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}"
+
