@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebSocket Example</title>
+</head>
+<body>
+  <h1>WebSocket Example</h1>
+  <textarea id="messageInput" placeholder="Type your message here"></textarea>
+  <button id="sendButton">Send Message</button>
+  <div id="output"></div>
+
+  <script>
+    const socket = new WebSocket('wss://rc1borgdr6.execute-api.us-east-1.amazonaws.com/prod/');
+
+    socket.onopen = () => {
+      console.log('WebSocket connection established.');
+      document.getElementById('output').innerHTML += '<p>WebSocket connection established.</p>';
+    };
+
+    socket.onmessage = (event) => {
+      console.log('Received:', event.data);
+      document.getElementById('output').innerHTML += `<p>Received: ${event.data}</p>`;
+    };
+
+    socket.onclose = (event) => {
+      console.log('WebSocket connection closed:', event);
+      document.getElementById('output').innerHTML += '<p>WebSocket connection closed.</p>';
+    };
+
+    socket.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      document.getElementById('output').innerHTML += '<p>WebSocket error occurred.</p>';
+    };
+
+    document.getElementById('sendButton').addEventListener('click', () => {
+      const message = document.getElementById('messageInput').value;
+      const payload = {
+        action: 'sendmessage',
+        message: message
+      };
+      socket.send(JSON.stringify(payload));
+      document.getElementById('output').innerHTML += `<p>Sent: ${message}</p>`;
+    });
+  </script>
+</body>
+</html>
