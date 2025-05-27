@@ -7,6 +7,18 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "input-files-bucket-${AWS::StackName}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - PUT
+              - POST
+            AllowedHeaders:
+              - '*'
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
 
   OutputFilesBucket:
     Type: AWS::S3::Bucket

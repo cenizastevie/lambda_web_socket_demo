@@ -113,6 +113,12 @@ Resources:
                 Resource:
                   - !ImportValue InputFilesBucketArn
                   - !ImportValue OutputFilesBucketArn
+                  - !Sub
+                      - "${BucketArn}/*"
+                      - BucketArn: !ImportValue InputFilesBucketArn
+                  - !Sub
+                      - "${BucketArn}/*"
+                      - BucketArn: !ImportValue OutputFilesBucketArn
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -141,23 +147,48 @@ Resources:
           import os
           import json
           import boto3
+
           def lambda_handler(event, context):
               s3 = boto3.client('s3')
               bucket = os.environ['BUCKET_NAME']
+
+              # Define CORS headers
+              cors_headers = {
+                  "Access-Control-Allow-Origin": "*",  # Be specific in production
+                  "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+                  "Access-Control-Allow-Methods": "OPTIONS,POST"
+              }
+
               try:
+                  # API Gateway sends the body as a string, so parse it
                   body = event.get('body')
                   if isinstance(body, str):
                       body = json.loads(body)
                   filename = body['filename']
               except Exception as e:
-                  return {'statusCode': 400, 'body': json.dumps({'error': 'Missing filename'})}
-              presigned_url = s3.generate_presigned_url(
-                  'put_object',
-                  Params={'Bucket': bucket, 'Key': filename},
-                  ExpiresIn=3600
-              )
+                  # Return error response with CORS headers
+                  return {
+                      'statusCode': 400,
+                      'headers': cors_headers,
+                      'body': json.dumps({'error': f'Missing filename or invalid request body: {str(e)}'})
+                  }
+
+              try:
+                  presigned_url = s3.generate_presigned_url(
+                      'put_object',
+                      Params={'Bucket': bucket, 'Key': filename, 'ContentType': 'text/csv'},
+                      ExpiresIn=3600
+                  )
+              except Exception as e:
+                  return {
+                      'statusCode': 500,
+                      'headers': cors_headers,
+                      'body': json.dumps({'error': f'Could not generate presigned URL: {str(e)}'})
+                  }
+
               return {
                   'statusCode': 200,
+                  'headers': cors_headers,
                   'body': json.dumps({'presigned_url': presigned_url, 'key': filename})
               }
       Handler: index.lambda_handler
