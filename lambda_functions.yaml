@@ -1,8 +1,58 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
-Description: Lambda Functions for S3/ECR Demo
+Description: Lambda Functions for S3/ECR Demo (CloudFormation Native)
 
 Resources:
+  # Define the API Gateway REST API
+  FileUploadAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: FileUploadAPI
+      Description: API Gateway for file upload operations
+
+  # Define the API Gateway Resource (the path /get-presigned-url)
+  PresignedUrlResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt FileUploadAPI.RootResourceId # This attaches it to the root of your API
+      PathPart: get-presigned-url
+      RestApiId: !Ref FileUploadAPI
+
+  # Define the API Gateway Method (POST /get-presigned-url)
+  PresignedUrlMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE # No authorization for this example
+      HttpMethod: POST
+      Integration:
+        IntegrationHttpMethod: POST # HTTP method for the Lambda invocation
+        Type: AWS_PROXY # Use Lambda proxy integration
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !GetAtt PresignUrlFunction.Arn # Referencing the Lambda function's ARN
+      ResourceId: !Ref PresignedUrlResource
+      RestApiId: !Ref FileUploadAPI
+
+  # Define the API Gateway Deployment
+  # This resource must be redeployed for changes to resources/methods to take effect
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: # Ensure the method is created before deployment
+      - PresignedUrlMethod
+    Properties:
+      RestApiId: !Ref FileUploadAPI
+      Description: Initial deployment of the File Upload API
+
+  # Define the API Gateway Stage
+  # This makes the API accessible at a specific URL
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: Prod # You can change this to 'Dev', 'Test', etc.
+      Description: Production stage for the File Upload API
+      RestApiId: !Ref FileUploadAPI
+      DeploymentId: !Ref ApiDeployment
+
+  # IAM Role for Lambda Execution
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -28,9 +78,7 @@ Resources:
                   - s3:ListBucket
                 Resource:
                   - !ImportValue InputFilesBucketArn
-                  # - !Sub "arn:aws:s3:::${InputFilesBucketName}/*"
                   - !ImportValue OutputFilesBucketArn
-                  # - !Sub "arn:aws:s3:::${OutputFilesBucketName}/*"
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -47,84 +95,58 @@ Resources:
                 Resource: '*'
               - Effect: Allow
                 Action:
-                  - ecr:* 
+                  - ecr:*
                 Resource: '*'
-  FileUploadApi:
-    Type: AWS::Serverless::Api
-    Properties:
-      Name: FileUploadDemoApi
-      StageName: prod
-      Cors:
-        AllowMethods: "POST,OPTIONS"
-        AllowHeaders: "*"
-        AllowOrigin: "*"
+
+  # The Lambda Function
   PresignUrlFunction:
-    Type: AWS::Serverless::Function
+    Type: AWS::Lambda::Function # Changed from AWS::Serverless::Function
     Properties:
-      InlineCode: |
-        import os
-        import json
-        import boto3
-        def lambda_handler(event, context):
-            s3 = boto3.client('s3')
-            bucket = os.environ['BUCKET_NAME']
-            try:
-                body = event.get('body')
-                if isinstance(body, str):
-                    body = json.loads(body)
-                filename = body['filename']
-            except Exception as e:
-                return {'statusCode': 400, 'body': json.dumps({'error': 'Missing filename'})}
-            presigned_url = s3.generate_presigned_url(
-                'put_object',
-                Params={'Bucket': bucket, 'Key': filename},
-                ExpiresIn=3600
-            )
-            return {
-                'statusCode': 200,
-                'body': json.dumps({'presigned_url': presigned_url, 'key': filename})
-            }
+      Code:
+        ZipFile: |
+          import os
+          import json
+          import boto3
+          def lambda_handler(event, context):
+              s3 = boto3.client('s3')
+              bucket = os.environ['BUCKET_NAME']
+              try:
+                  body = event.get('body')
+                  if isinstance(body, str):
+                      body = json.loads(body)
+                  filename = body['filename']
+              except Exception as e:
+                  return {'statusCode': 400, 'body': json.dumps({'error': 'Missing filename'})}
+              presigned_url = s3.generate_presigned_url(
+                  'put_object',
+                  Params={'Bucket': bucket, 'Key': filename},
+                  ExpiresIn=3600
+              )
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'presigned_url': presigned_url, 'key': filename})
+              }
       Handler: index.lambda_handler
       Runtime: python3.13
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
           BUCKET_NAME: !ImportValue InputFilesBucket
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            RestApiId: !Ref FileUploadApi
-            Path: /get-presigned-url
-            Method: post
       Timeout: 10
 
-  # DockerProcessFunction:
-  #   Type: AWS::Serverless::Function
-  #   DependsOn:
-  #     - LambdaExecutionRole
-  #   Properties:
-  #     PackageType: Image
-  #     ImageUri: !ImportValue DockerProcessRepositoryUri
-  #     Role: !GetAtt LambdaExecutionRole.Arn
-  #     Environment:
-  #       Variables:
-  #         INPUT_BUCKET: !ImportValue InputFilesBucket
-  #         OUTPUT_BUCKET: !ImportValue OutputFilesBucket
-  #         APIGW_MANAGEMENT_API: !ImportValue WebSocketApiEndpoint
-  #     Events:
-  #       ApiEvent:
-  #         Type: Api
-  #         Properties:
-  #           RestApiId: !Ref FileUploadApi
-  #           Path: /process
-  #           Method: post
-  #     Timeout: 60
+  # Permission for API Gateway to invoke the Lambda function
+  ApiGatewayLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt PresignUrlFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${FileUploadAPI}/*/*" # Grant permission for specific API and any method/path
 
 Outputs:
   PresignUrlFunction:
     Description: Lambda for presigned URL
     Value: !Ref PresignUrlFunction
-  # DockerProcessFunction:
-  #   Description: Lambda (Docker) for processing
-  #   Value: !Ref DockerProcessFunction
+  FileUploadAPIEndpoint:
+    Description: API Gateway endpoint URL for File Upload API
+    Value: !Sub "https://${FileUploadAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod/get-presigned-url"
