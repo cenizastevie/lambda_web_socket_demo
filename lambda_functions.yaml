@@ -31,6 +31,40 @@ Resources:
           - LambdaArn: !GetAtt PresignUrlFunction.Arn # Referencing the Lambda function's ARN
       ResourceId: !Ref PresignedUrlResource
       RestApiId: !Ref FileUploadAPI
+      MethodResponses: # CORS headers for POST method
+        - StatusCode: '200'
+          ResponseModels:
+            application/json: 'Empty' # You can replace 'Empty' with your actual response model
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  PresignedUrlOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK # Mock integration for OPTIONS
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'" # Adjust as needed
+              method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'" # Allow OPTIONS and POST
+              method.response.header.Access-Control-Allow-Origin: "'*'" # Allow all origins, or specify your domain
+            ResponseTemplates:
+              application/json: '{}'
+      ResourceId: !Ref PresignedUrlResource
+      RestApiId: !Ref FileUploadAPI
+      MethodResponses: # CORS headers for OPTIONS method
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
 
   # Define the API Gateway Deployment
   # This resource must be redeployed for changes to resources/methods to take effect
