@@ -1,25 +1,40 @@
-Transform: AWS::Serverless-2016-10-31
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'FastAPI on Lambda with API Gateway WebSocket + Lambda + DynamoDB connection
-  manager
+Transform: AWS::Serverless-2016-10-31
+Description: 'S3 buckets for input/output/static web, Lambda for presigned URL, Lambda
+  (Docker) for processing, API Gateway endpoints, public access as required.
 
   '
 Resources:
-  WebSocketConnectionsTable:
-    Type: AWS::DynamoDB::Table
+  InputFilesBucket:
+    Type: AWS::S3::Bucket
     Properties:
-      TableName: WebSocketConnections
-      AttributeDefinitions:
-      - AttributeName: connectionId
-        AttributeType: S
-      KeySchema:
-      - AttributeName: connectionId
-        KeyType: HASH
-      BillingMode: PAY_PER_REQUEST
+      BucketName: input-files-bucket-!Ref AWS::StackName
+  OutputFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: output-files-bucket-!Ref AWS::StackName
+      AccessControl: PublicRead
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+  StaticWebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: static-web-bucket-!Ref AWS::StackName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      AccessControl: PublicRead
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: WebSocketLambdaExecutionRole
+      RoleName: S3LambdaExecutionRole-!Ref AWS::StackName
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -30,221 +45,112 @@ Resources:
           Action:
           - sts:AssumeRole
       Policies:
-      - PolicyName: WebSocketDynamoAndApiGateway
+      - PolicyName: S3AccessPolicy
         PolicyDocument:
           Version: '2012-10-17'
           Statement:
           - Effect: Allow
             Action:
-            - dynamodb:PutItem
-            - dynamodb:DeleteItem
-            - dynamodb:GetItem
-            - dynamodb:Scan
+            - s3:GetObject
+            - s3:PutObject
+            - s3:ListBucket
             Resource:
-              Fn::GetAtt:
-              - WebSocketConnectionsTable
+            - Fn::GetAtt:
+              - InputFilesBucket
               - Arn
-          - Effect: Allow
-            Action:
-            - execute-api:ManageConnections
-            Resource:
-              Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/@connections/*
+            - Fn::Sub: ${InputFilesBucket.Arn}/*
+            - Fn::GetAtt:
+              - OutputFilesBucket
+              - Arn
+            - Fn::Sub: ${OutputFilesBucket.Arn}/*
           - Effect: Allow
             Action:
             - logs:CreateLogGroup
             - logs:CreateLogStream
             - logs:PutLogEvents
             Resource: arn:aws:logs:*:*:*
-  WebSocketConnectFunction:
+          - Effect: Allow
+            Action:
+            - execute-api:ManageConnections
+            Resource:
+              Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/@connections/*
+  PresignUrlFunction:
     Type: AWS::Serverless::Function
     Properties:
+      InlineCode: "import os\nimport json\nimport boto3\ndef lambda_handler(event,\
+        \ context):\n    s3 = boto3.client('s3')\n    bucket = os.environ['BUCKET_NAME']\n\
+        \    try:\n        body = event.get('body')\n        if isinstance(body, str):\n\
+        \            body = json.loads(body)\n        filename = body['filename']\n\
+        \    except Exception as e:\n        return {'statusCode': 400, 'body': json.dumps({'error':\
+        \ 'Missing filename'})}\n    presigned_url = s3.generate_presigned_url(\n\
+        \        'put_object',\n        Params={'Bucket': bucket, 'Key': filename},\n\
+        \        ExpiresIn=3600\n    )\n    return {\n        'statusCode': 200,\n\
+        \        'body': json.dumps({'presigned_url': presigned_url, 'key': filename})\n\
+        \    }\n"
       Handler: index.lambda_handler
       Runtime: python3.13
       Role:
         Fn::GetAtt:
         - LambdaExecutionRole
         - Arn
-      CodeUri: WebSocketConnectFunction
       Environment:
         Variables:
-          TABLE_NAME:
-            Ref: WebSocketConnectionsTable
+          BUCKET_NAME:
+            Ref: InputFilesBucket
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /get-presigned-url
+            Method: post
       Timeout: 10
-    Metadata:
-      SamResourceId: WebSocketConnectFunction
-  WebSocketDisconnectFunction:
+  DockerProcessRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: docker-process-handler-repo
+  DockerProcessFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: index.lambda_handler
-      Runtime: python3.13
+      PackageType: Image
+      ImageUri:
+        Fn::Sub: ${DockerProcessRepository.RepositoryUri}:latest
       Role:
         Fn::GetAtt:
         - LambdaExecutionRole
         - Arn
-      CodeUri: WebSocketDisconnectFunction
       Environment:
         Variables:
-          TABLE_NAME:
-            Ref: WebSocketConnectionsTable
-      Timeout: 10
-    Metadata:
-      SamResourceId: WebSocketDisconnectFunction
-  WebSocketSendMessageFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: index.lambda_handler
-      Runtime: python3.13
-      Role:
-        Fn::GetAtt:
-        - LambdaExecutionRole
-        - Arn
-      CodeUri: WebSocketSendMessageFunction
-      Environment:
-        Variables:
-          APIGW_DOMAIN:
-            Fn::Sub: ${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com
-          APIGW_STAGE: prod
-      Timeout: 10
-    Metadata:
-      SamResourceId: WebSocketSendMessageFunction
-  WebSocketApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name: WebSocketApi
-      ProtocolType: WEBSOCKET
-      RouteSelectionExpression: $request.body.action
-  WebSocketConnectRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId:
-        Ref: WebSocketApi
-      RouteKey: $connect
-      AuthorizationType: NONE
-      Target:
-        Fn::Sub: integrations/${WebSocketConnectIntegration}
-  WebSocketDisconnectRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId:
-        Ref: WebSocketApi
-      RouteKey: $disconnect
-      AuthorizationType: NONE
-      Target:
-        Fn::Sub: integrations/${WebSocketDisconnectIntegration}
-  WebSocketSendMessageRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId:
-        Ref: WebSocketApi
-      RouteKey: sendmessage
-      AuthorizationType: NONE
-      Target:
-        Fn::Sub: integrations/${WebSocketSendMessageIntegration}
-  WebSocketConnectIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId:
-        Ref: WebSocketApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri:
-        Fn::Sub:
-        - arn:aws:apigateway:${Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
-        - Region:
-            Ref: AWS::Region
-          LambdaArn:
-            Fn::GetAtt:
-            - WebSocketConnectFunction
-            - Arn
-  WebSocketDisconnectIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId:
-        Ref: WebSocketApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri:
-        Fn::Sub:
-        - arn:aws:apigateway:${Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
-        - Region:
-            Ref: AWS::Region
-          LambdaArn:
-            Fn::GetAtt:
-            - WebSocketDisconnectFunction
-            - Arn
-  WebSocketSendMessageIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId:
-        Ref: WebSocketApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri:
-        Fn::Sub:
-        - arn:aws:apigateway:${Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
-        - Region:
-            Ref: AWS::Region
-          LambdaArn:
-            Fn::GetAtt:
-            - WebSocketSendMessageFunction
-            - Arn
-  WebSocketDeployment:
-    Type: AWS::ApiGatewayV2::Deployment
-    DependsOn:
-    - WebSocketConnectRoute
-    - WebSocketDisconnectRoute
-    - WebSocketSendMessageRoute
-    Properties:
-      ApiId:
-        Ref: WebSocketApi
-  WebSocketStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId:
-        Ref: WebSocketApi
-      DeploymentId:
-        Ref: WebSocketDeployment
-      StageName: prod
-      AutoDeploy: true
-  LambdaInvokePermissionConnect:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName:
-        Ref: WebSocketConnectFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn:
-        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/$connect
-  LambdaInvokePermissionDisconnect:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName:
-        Ref: WebSocketDisconnectFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn:
-        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/$disconnect
-  LambdaInvokePermissionSendMessage:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName:
-        Ref: WebSocketSendMessageFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn:
-        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/sendmessage
-  CloudWatchLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: /lambda/websocket-lambdas
-      RetentionInDays: 7
+          INPUT_BUCKET:
+            Ref: InputFilesBucket
+          OUTPUT_BUCKET:
+            Ref: OutputFilesBucket
+          APIGW_MANAGEMENT_API:
+            Fn::ImportValue: WebSocketApiEndpoint
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /process
+            Method: post
+      Timeout: 60
 Outputs:
-  WebSocketApiId:
-    Description: WebSocket API ID
+  InputFilesBucket:
+    Description: Input S3 Bucket
     Value:
-      Ref: WebSocketApi
-  WebSocketApiEndpoint:
-    Description: WebSocket API Endpoint URL
+      Ref: InputFilesBucket
+  OutputFilesBucket:
+    Description: Output S3 Bucket (public)
     Value:
-      Fn::Sub: wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${WebSocketStage}
-  WebSocketApiArn:
-    Description: WebSocket API ARN
+      Ref: OutputFilesBucket
+  StaticWebBucket:
+    Description: Static Web S3 Bucket (public)
     Value:
-      Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}
+      Ref: StaticWebBucket
+  PresignUrlFunction:
+    Description: Lambda for presigned URL
+    Value:
+      Ref: PresignUrlFunction
+  DockerProcessFunction:
+    Description: Lambda (Docker) for processing
+    Value:
+      Ref: DockerProcessFunction

@@ -213,8 +213,16 @@ Outputs:
   WebSocketApiEndpoint:
     Description: WebSocket API Endpoint URL
     Value: !Sub "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${WebSocketStage}"
+    Export:
+      Name: WebSocketApiEndpoint
 
   WebSocketApiArn:
     Description: WebSocket API ARN
     Value: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}"
+
+  WebSocketConnectionsTableExport:
+    Description: WebSocket DynamoDB Table Name
+    Value: !Ref WebSocketConnectionsTable
+    Export:
+      Name: WebSocketConnectionsTable
 

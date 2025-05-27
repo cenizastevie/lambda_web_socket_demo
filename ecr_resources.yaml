@@ -1,0 +1,21 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ECR Repository for Docker Lambda
+
+Resources:
+  DockerProcessRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: docker-process-handler-repo
+
+Outputs:
+  DockerProcessRepositoryUri:
+    Description: ECR Repository URI
+    Value: !GetAtt DockerProcessRepository.RepositoryUri
+    Export:
+      Name: DockerProcessRepositoryUri
+  DockerProcessRepositoryArn:
+    Description: ECR Repository ARN
+    Value: !GetAtt DockerProcessRepository.Arn
+    Export:
+      Name: DockerProcessRepositoryArn

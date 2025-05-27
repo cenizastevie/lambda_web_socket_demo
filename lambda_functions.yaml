@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda Functions for S3/ECR Demo
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "S3LambdaExecutionRole-${AWS::StackName}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: S3ECRAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !ImportValue InputFilesBucketArn
+                  # - !Sub "arn:aws:s3:::${InputFilesBucketName}/*"
+                  - !ImportValue OutputFilesBucketArn
+                  # - !Sub "arn:aws:s3:::${OutputFilesBucketName}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: Allow
+                Action:
+                  - execute-api:ManageConnections
+                Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/@connections/*
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:* 
+                Resource: '*'
+  FileUploadApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: FileUploadDemoApi
+      StageName: prod
+      Cors:
+        AllowMethods: "POST,OPTIONS"
+        AllowHeaders: "*"
+        AllowOrigin: "*"
+  PresignUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      InlineCode: |
+        import os
+        import json
+        import boto3
+        def lambda_handler(event, context):
+            s3 = boto3.client('s3')
+            bucket = os.environ['BUCKET_NAME']
+            try:
+                body = event.get('body')
+                if isinstance(body, str):
+                    body = json.loads(body)
+                filename = body['filename']
+            except Exception as e:
+                return {'statusCode': 400, 'body': json.dumps({'error': 'Missing filename'})}
+            presigned_url = s3.generate_presigned_url(
+                'put_object',
+                Params={'Bucket': bucket, 'Key': filename},
+                ExpiresIn=3600
+            )
+            return {
+                'statusCode': 200,
+                'body': json.dumps({'presigned_url': presigned_url, 'key': filename})
+            }
+      Handler: index.lambda_handler
+      Runtime: python3.13
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          BUCKET_NAME: !ImportValue InputFilesBucket
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FileUploadApi
+            Path: /get-presigned-url
+            Method: post
+      Timeout: 10
+
+  # DockerProcessFunction:
+  #   Type: AWS::Serverless::Function
+  #   DependsOn:
+  #     - LambdaExecutionRole
+  #   Properties:
+  #     PackageType: Image
+  #     ImageUri: !ImportValue DockerProcessRepositoryUri
+  #     Role: !GetAtt LambdaExecutionRole.Arn
+  #     Environment:
+  #       Variables:
+  #         INPUT_BUCKET: !ImportValue InputFilesBucket
+  #         OUTPUT_BUCKET: !ImportValue OutputFilesBucket
+  #         APIGW_MANAGEMENT_API: !ImportValue WebSocketApiEndpoint
+  #     Events:
+  #       ApiEvent:
+  #         Type: Api
+  #         Properties:
+  #           RestApiId: !Ref FileUploadApi
+  #           Path: /process
+  #           Method: post
+  #     Timeout: 60
+
+Outputs:
+  PresignUrlFunction:
+    Description: Lambda for presigned URL
+    Value: !Ref PresignUrlFunction
+  # DockerProcessFunction:
+  #   Description: Lambda (Docker) for processing
+  #   Value: !Ref DockerProcessFunction

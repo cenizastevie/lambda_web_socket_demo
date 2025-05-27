@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: S3 Buckets for input, output, and static web hosting
+
+Resources:
+  InputFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "input-files-bucket-${AWS::StackName}"
+
+  OutputFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "output-files-bucket-${AWS::StackName}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  OutputFilesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OutputFilesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${OutputFilesBucket.Arn}/*"
+
+  StaticWebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "static-web-bucket-${AWS::StackName}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  StaticWebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticWebBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${StaticWebBucket.Arn}/*"
+
+Outputs:
+  InputFilesBucket:
+    Description: Input S3 Bucket
+    Value: !Ref InputFilesBucket
+    Export:
+      Name: InputFilesBucket
+  InputFilesBucketArn:
+    Description: Input S3 Bucket ARN
+    Value: !GetAtt InputFilesBucket.Arn
+    Export:
+      Name: InputFilesBucketArn
+  OutputFilesBucket:
+    Description: Output S3 Bucket (public)
+    Value: !Ref OutputFilesBucket
+    Export:
+      Name: OutputFilesBucket
+  OutputFilesBucketArn:
+    Description: Output S3 Bucket ARN
+    Value: !GetAtt OutputFilesBucket.Arn
+    Export:
+      Name: OutputFilesBucketArn
+  StaticWebBucket:
+    Description: Static Web S3 Bucket (public)
+    Value: !Ref StaticWebBucket
+    Export:
+      Name: StaticWebBucket
+  StaticWebBucketArn:
+    Description: Static Web S3 Bucket ARN
+    Value: !GetAtt StaticWebBucket.Arn
+    Export:
+      Name: StaticWebBucketArn
