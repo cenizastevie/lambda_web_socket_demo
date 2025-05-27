@@ -1,0 +1,250 @@
+Transform: AWS::Serverless-2016-10-31
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'FastAPI on Lambda with API Gateway WebSocket + Lambda + DynamoDB connection
+  manager
+
+  '
+Resources:
+  WebSocketConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: WebSocketConnections
+      AttributeDefinitions:
+      - AttributeName: connectionId
+        AttributeType: S
+      KeySchema:
+      - AttributeName: connectionId
+        KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: WebSocketLambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: WebSocketDynamoAndApiGateway
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:GetItem
+            - dynamodb:Scan
+            Resource:
+              Fn::GetAtt:
+              - WebSocketConnectionsTable
+              - Arn
+          - Effect: Allow
+            Action:
+            - execute-api:ManageConnections
+            Resource:
+              Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/@connections/*
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+  WebSocketConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.lambda_handler
+      Runtime: python3.13
+      Role:
+        Fn::GetAtt:
+        - LambdaExecutionRole
+        - Arn
+      CodeUri: WebSocketConnectFunction
+      Environment:
+        Variables:
+          TABLE_NAME:
+            Ref: WebSocketConnectionsTable
+      Timeout: 10
+    Metadata:
+      SamResourceId: WebSocketConnectFunction
+  WebSocketDisconnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.lambda_handler
+      Runtime: python3.13
+      Role:
+        Fn::GetAtt:
+        - LambdaExecutionRole
+        - Arn
+      CodeUri: WebSocketDisconnectFunction
+      Environment:
+        Variables:
+          TABLE_NAME:
+            Ref: WebSocketConnectionsTable
+      Timeout: 10
+    Metadata:
+      SamResourceId: WebSocketDisconnectFunction
+  WebSocketSendMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.lambda_handler
+      Runtime: python3.13
+      Role:
+        Fn::GetAtt:
+        - LambdaExecutionRole
+        - Arn
+      CodeUri: WebSocketSendMessageFunction
+      Environment:
+        Variables:
+          APIGW_DOMAIN:
+            Fn::Sub: ${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com
+          APIGW_STAGE: prod
+      Timeout: 10
+    Metadata:
+      SamResourceId: WebSocketSendMessageFunction
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: WebSocketApi
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.action
+  WebSocketConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      RouteKey: $connect
+      AuthorizationType: NONE
+      Target:
+        Fn::Sub: integrations/${WebSocketConnectIntegration}
+  WebSocketDisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      Target:
+        Fn::Sub: integrations/${WebSocketDisconnectIntegration}
+  WebSocketSendMessageRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      RouteKey: sendmessage
+      AuthorizationType: NONE
+      Target:
+        Fn::Sub: integrations/${WebSocketSendMessageIntegration}
+  WebSocketConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+        - arn:aws:apigateway:${Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+        - Region:
+            Ref: AWS::Region
+          LambdaArn:
+            Fn::GetAtt:
+            - WebSocketConnectFunction
+            - Arn
+  WebSocketDisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+        - arn:aws:apigateway:${Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+        - Region:
+            Ref: AWS::Region
+          LambdaArn:
+            Fn::GetAtt:
+            - WebSocketDisconnectFunction
+            - Arn
+  WebSocketSendMessageIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+        - arn:aws:apigateway:${Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+        - Region:
+            Ref: AWS::Region
+          LambdaArn:
+            Fn::GetAtt:
+            - WebSocketSendMessageFunction
+            - Arn
+  WebSocketDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+    - WebSocketConnectRoute
+    - WebSocketDisconnectRoute
+    - WebSocketSendMessageRoute
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      DeploymentId:
+        Ref: WebSocketDeployment
+      StageName: prod
+      AutoDeploy: true
+  LambdaInvokePermissionConnect:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: WebSocketConnectFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/$connect
+  LambdaInvokePermissionDisconnect:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: WebSocketDisconnectFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/$disconnect
+  LambdaInvokePermissionSendMessage:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: WebSocketSendMessageFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/sendmessage
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /lambda/websocket-lambdas
+      RetentionInDays: 7
+Outputs:
+  WebSocketApiId:
+    Description: WebSocket API ID
+    Value:
+      Ref: WebSocketApi
+  WebSocketApiEndpoint:
+    Description: WebSocket API Endpoint URL
+    Value:
+      Fn::Sub: wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${WebSocketStage}
+  WebSocketApiArn:
+    Description: WebSocket API ARN
+    Value:
+      Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}

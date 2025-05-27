@@ -1,3 +1,4 @@
+Transform: AWS::Serverless-2016-10-31
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   FastAPI on Lambda with API Gateway WebSocket + Lambda + DynamoDB connection manager
@@ -60,7 +61,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: index.lambda_handler
-      Runtime: python3.11
+      Runtime: python3.13
       Role: !GetAtt LambdaExecutionRole.Arn
       CodeUri: connect_handler/
       Environment:
@@ -72,7 +73,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: index.lambda_handler
-      Runtime: python3.11
+      Runtime: python3.13
       Role: !GetAtt LambdaExecutionRole.Arn
       CodeUri: disconnect_handler/
       Environment:
@@ -84,7 +85,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: index.lambda_handler
-      Runtime: python3.11
+      Runtime: python3.13
       Role: !GetAtt LambdaExecutionRole.Arn
       CodeUri: send_message_handler/
       Environment:

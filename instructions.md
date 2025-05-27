@@ -26,7 +26,7 @@
 
 2. **Deploy your application (guided):**
    ```cmd
-   sam deploy --guided --template web_socket_formation.yaml
+   sam deploy --guided --template web_socket_formation.yaml --capabilities CAPABILITY_NAMED_IAM
    ```
    - Follow the prompts to set stack name, region, and save configuration for future deploys.
 
