@@ -14,9 +14,13 @@
         "runtime": "python3.13",
         "s3_bucket": "zappa-n04iqcj23",
         "environment_variables": {
-            "BUCKET_NAME": "input-files-bucket-websocket-s3-demo"
+            "INPUT_BUCKET_NAME": "input-files-bucket-websocket-s3-demo",
+            "OUTPUT_BUCKET_NAME": "output-files-bucket-websocket-s3-demo",
+            "WEBSOCKET_API_ENDPOINT": "https://1sdck1nol5.execute-api.us-east-1.amazonaws.com/prod"
         },
-        "cors": true 
-        
+        "cors": true,
+        "async_resources": true,
+        "lambda_memory": 512,
+        "lambda_timeout": 300
     }
 }
