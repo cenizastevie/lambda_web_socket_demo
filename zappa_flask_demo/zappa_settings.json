@@ -21,6 +21,13 @@
         "cors": true,
         "async_resources": true,
         "lambda_memory": 512,
-        "lambda_timeout": 300
+        "lambda_timeout": 300,
+        "aws_permissions": [
+            {
+                "Effect": "Allow",
+                "Action": "execute-api:ManageConnections",
+                "Resource": "arn:aws:execute-api:us-east-1:211626350366:1sdck1nol5/prod/POST/@connections/*"
+            }
+        ]
     }
 }

@@ -3,7 +3,7 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css'
 
 // API and WebSocket endpoints
-const API_BASE = 'https://k6pq1bmi62.execute-api.us-east-1.amazonaws.com/Prod';
+const API_BASE = 'https://d87zdfaob0.execute-api.us-east-1.amazonaws.com/dev';
 const WEBSOCKET_URL = 'wss://1sdck1nol5.execute-api.us-east-1.amazonaws.com/prod/';
 
 function App() {
@@ -20,7 +20,11 @@ function App() {
   useEffect(() => {
     const ws = new WebSocket(WEBSOCKET_URL)
     wsRef.current = ws
-    ws.onopen = () => setWsStatus('🟢 Connected')
+    ws.onopen = () => {
+      setWsStatus('🟢 Connected')
+      // Request connection ID after connecting
+      ws.send(JSON.stringify({ action: 'get_connection_id' }))
+    }
     ws.onclose = () => setWsStatus('🔴 Disconnected')
     ws.onerror = () => setWsStatus('⚠️ Error')
     ws.onmessage = (event) => {
@@ -28,8 +32,11 @@ function App() {
       try {
         const msg = JSON.parse(event.data)
         if (msg.connectionId) setConnectionId(msg.connectionId)
-        if (msg.scatter_plot_url) setScatterUrl(msg.scatter_plot_url)
-        if (msg.bar_plot_url) setBarUrl(msg.bar_plot_url)
+        if (msg.status === 'scatter_plot_complete' && msg.plot_url) setScatterUrl(msg.plot_url)
+        if (msg.status === 'bar_plot_complete' && msg.plot_url) setBarUrl(msg.plot_url)
+        if (msg.processed_message) {
+          setWsMessages(msgs => [...msgs, `Server: ${msg.processed_message}`])
+        }
       } catch {}
     }
     return () => ws.close()
@@ -46,7 +53,7 @@ function App() {
     if (!file) return
     setStatus('Requesting presigned URL...')
     try {
-      const res = await fetch(`${API_BASE}/get-presigned-url`, {
+      const res = await fetch(`${API_BASE}/generate-presigned-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: file.name })
@@ -93,9 +100,9 @@ function App() {
     <div className="app-container bg-light min-vh-100 d-flex flex-column">
       <div className="container py-4 flex-grow-1">
         <h1 className="mb-4 text-center">File Upload & WebSocket Demo</h1>
-        <div className="d-flex flex-column align-items-end mb-3">
-          <span className="me-3">Status: <span>{wsStatus}</span></span>
-          <span>Connection ID: <b>{connectionId}</b></span>
+        <div className="d-flex flex-row justify-content-end align-items-center mb-3 gap-3">
+          <span>Status: <span>{wsStatus}</span></span>
+          <span>Connection ID: <b>{connectionId || 'Not received yet'}</b></span>
         </div>
         <div className="card mb-4">
           <div className="card-body">

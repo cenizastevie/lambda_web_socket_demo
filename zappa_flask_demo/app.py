@@ -2,22 +2,22 @@ import os
 import json
 import boto3
 from flask import Flask, request, jsonify
-from zappa.asynchronous import task, AsyncException
+from zappa.asynchronous import task, AsyncException # AsyncException is still needed for error handling within Zappa's task system, even if not for .result chaining in this specific simplified flow
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import io
+import traceback # Added for better error logging
 
 if os.environ.get('LAMBDA_TASK_ROOT') is None:
     try:
         from dotenv import load_dotenv
         load_dotenv()
-        print("INFO: .env file loaded for local development.")
     except ImportError:
-        print("WARNING: python-dotenv not installed. Environment variables must be set manually for local testing.")
+        pass
     except Exception as e:
-        print(f"WARNING: Could not load .env file: {e}")
+        pass
 
 app = Flask(__name__)
 
@@ -49,8 +49,10 @@ def hello_world():
 def generate_presigned_url_endpoint():
     if request.method == 'OPTIONS':
         return '', 204
+
     if not S3_INPUT_BUCKET_NAME:
         return jsonify(error="INPUT_BUCKET_NAME environment variable not set."), 500
+
     try:
         body = request.json
         if not body or 'filename' not in body:
@@ -58,6 +60,7 @@ def generate_presigned_url_endpoint():
         filename = body['filename']
     except Exception as e:
         return jsonify(error=f'Invalid request body: {str(e)}'), 400
+
     try:
         presigned_url = s3_client.generate_presigned_url(
             'put_object',
@@ -65,8 +68,8 @@ def generate_presigned_url_endpoint():
             ExpiresIn=3600
         )
     except Exception as e:
-        print(f"Error generating presigned URL: {e}")
         return jsonify(error=f'Could not generate presigned URL: {str(e)}'), 500
+
     return jsonify({'presigned_url': presigned_url, 'key': filename}), 200
 
 def upload_plot_to_s3(plot_data_bytes, plot_filename):
@@ -79,30 +82,32 @@ def upload_plot_to_s3(plot_data_bytes, plot_filename):
         ContentType='image/png'
     )
     plot_public_url = f"https://{S3_OUTPUT_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{plot_filename}"
-    print(f"Uploaded {plot_filename} to {S3_OUTPUT_BUCKET_NAME}. Public URL: {plot_public_url}")
     return plot_public_url
 
 def send_websocket_message(connection_id, message_data):
     if not apigw_management_client:
-        print("Warning: WebSocket API Gateway Management Client not initialized. Cannot send message.")
+        print("WebSocket API endpoint not configured, cannot send message.")
         return
+
     try:
         apigw_management_client.post_to_connection(
             ConnectionId=connection_id,
             Data=json.dumps(message_data).encode('utf-8')
         )
-        print(f"Message sent to connection {connection_id}: {message_data.get('status', 'unknown status')}")
     except apigw_management_client.exceptions.GoneException:
-        print(f"Connection {connection_id} no longer exists. Skipping message.")
+        print(f"Connection {connection_id} is gone.")
+        pass # Client disconnected
     except Exception as e:
-        print(f"Error sending message to connection {connection_id}: {e}")
+        print(f"Error sending WebSocket message to {connection_id}: {e}")
+        print(traceback.format_exc()) # Print full traceback for websocket errors
 
 @task
 def process_csv_and_scatter_plot(csv_key, connection_id):
-    print(f"Starting scatter plot task for {csv_key}")
+    plot_type = "scatter"
     try:
         obj = s3_client.get_object(Bucket=S3_INPUT_BUCKET_NAME, Key=csv_key)
         df = pd.read_csv(io.BytesIO(obj['Body'].read()))
+
         if 'x_data' in df.columns and 'y_data' in df.columns:
             plt.figure(figsize=(10, 6))
             plt.scatter(df['x_data'], df['y_data'])
@@ -110,27 +115,46 @@ def process_csv_and_scatter_plot(csv_key, connection_id):
             plt.xlabel('X Data')
             plt.ylabel('Y Data')
             plt.grid(True)
+
             buf = io.BytesIO()
             plt.savefig(buf, format='png')
             buf.seek(0)
             plt.close()
+
             plot_filename = f"scatter_plot_{os.path.basename(csv_key).replace('.csv', '.png')}"
             plot_public_url = upload_plot_to_s3(buf.getvalue(), plot_filename)
-            print(f"Scatter plot task completed for {csv_key}")
-            return plot_public_url
+
+            send_websocket_message(connection_id, {
+                "status": f"{plot_type}_plot_complete",
+                "filename": csv_key,
+                "plot_url": plot_public_url,
+                "message": f"Successfully generated {plot_type} plot."
+            })
         else:
-            print(f"CSV {csv_key} missing 'x_data' or 'y_data' columns for scatter plot.")
-            return None
+            error_message = f"CSV '{csv_key}' is missing 'x_data' or 'y_data' columns for {plot_type} plot."
+            print(error_message)
+            send_websocket_message(connection_id, {
+                "status": f"{plot_type}_plot_failed",
+                "filename": csv_key,
+                "message": error_message
+            })
     except Exception as e:
-        print(f"Error in scatter plot task for {csv_key}: {e}")
-        return None
+        error_message = f"Error generating {plot_type} plot for {csv_key}: {str(e)}"
+        print(error_message)
+        print(traceback.format_exc()) # Print full traceback for debugging
+        send_websocket_message(connection_id, {
+            "status": f"{plot_type}_plot_failed",
+            "filename": csv_key,
+            "message": error_message
+        })
 
 @task
 def process_csv_and_bar_plot(csv_key, connection_id):
-    print(f"Starting bar plot task for {csv_key}")
+    plot_type = "bar"
     try:
         obj = s3_client.get_object(Bucket=S3_INPUT_BUCKET_NAME, Key=csv_key)
         df = pd.read_csv(io.BytesIO(obj['Body'].read()))
+
         if 'category' in df.columns and 'value' in df.columns:
             plt.figure(figsize=(10, 6))
             plt.bar(df['category'], df['value'])
@@ -139,70 +163,72 @@ def process_csv_and_bar_plot(csv_key, connection_id):
             plt.ylabel('Value')
             plt.xticks(rotation=45, ha='right')
             plt.tight_layout()
+
             buf = io.BytesIO()
             plt.savefig(buf, format='png')
             buf.seek(0)
             plt.close()
+
             plot_filename = f"bar_plot_{os.path.basename(csv_key).replace('.csv', '.png')}"
             plot_public_url = upload_plot_to_s3(buf.getvalue(), plot_filename)
-            print(f"Bar plot task completed for {csv_key}")
-            return plot_public_url
+
+            send_websocket_message(connection_id, {
+                "status": f"{plot_type}_plot_complete",
+                "filename": csv_key,
+                "plot_url": plot_public_url,
+                "message": f"Successfully generated {plot_type} plot."
+            })
         else:
-            print(f"CSV {csv_key} missing 'category' or 'value' columns for bar plot.")
-            return None
+            error_message = f"CSV '{csv_key}' is missing 'category' or 'value' columns for {plot_type} plot."
+            print(error_message)
+            send_websocket_message(connection_id, {
+                "status": f"{plot_type}_plot_failed",
+                "filename": csv_key,
+                "message": error_message
+            })
     except Exception as e:
-        print(f"Error in bar plot task for {csv_key}: {e}")
-        return None
+        error_message = f"Error generating {plot_type} plot for {csv_key}: {str(e)}"
+        print(error_message)
+        print(traceback.format_exc()) # Print full traceback for debugging
+        send_websocket_message(connection_id, {
+            "status": f"{plot_type}_plot_failed",
+            "filename": csv_key,
+            "message": error_message
+        })
+
+# Removed assemble_plots_and_notify task as it's no longer needed for direct chaining
 
 @task
-def assemble_plots_and_notify(csv_key, connection_id, scatter_task_id, bar_task_id):
-    print(f"Starting assemble_plots_and_notify for {csv_key}, connection_id: {connection_id}")
-    send_websocket_message(connection_id, {
-        "status": "assembling_plots",
-        "filename": csv_key,
-        "message": "Collecting plot results..."
-    })
-    scatter_plot_url = None
-    bar_plot_url = None
-    errors = []
+def start_plot_generation_workflow(csv_key, connection_id):
     try:
-        scatter_plot_url = AsyncException(process_csv_and_scatter_plot, scatter_task_id).result
-        if scatter_plot_url is None:
-            errors.append("Scatter plot generation failed.")
-            print(f"Failed to get scatter plot URL for {csv_key}")
-    except Exception as e:
-        errors.append(f"Error retrieving scatter plot result: {e}")
-        print(f"Error retrieving scatter plot result for {csv_key}: {e}")
-    try:
-        bar_plot_url = AsyncException(process_csv_and_bar_plot, bar_task_id).result
-        if bar_plot_url is None:
-            errors.append("Bar plot generation failed.")
-            print(f"Failed to get bar plot URL for {csv_key}")
-    except Exception as e:
-        errors.append(f"Error retrieving bar plot result: {e}")
-        print(f"Error retrieving bar plot result for {csv_key}: {e}")
-    if errors:
         send_websocket_message(connection_id, {
-            "status": "processing_failed",
+            "status": "workflow_initiated",
             "filename": csv_key,
-            "message": "Some plots could not be generated.",
-            "errors": errors
+            "message": "CSV plot generation tasks initiated. Updates for each plot will follow."
         })
-        print(f"Assemble plots failed for {csv_key} with errors: {errors}")
-        return
-    send_websocket_message(connection_id, {
-        "status": "processing_complete",
-        "filename": csv_key,
-        "message": "All plots generated and uploaded!",
-        "scatter_plot_url": scatter_plot_url,
-        "bar_plot_url": bar_plot_url
-    })
-    print(f"All plots assembled and notification sent for {csv_key}.")
+
+        # Directly dispatch the plot generation tasks
+        process_csv_and_scatter_plot(csv_key, connection_id)
+        process_csv_and_bar_plot(csv_key, connection_id)
+
+        # No need to return anything specific here, as results are sent via WS by individual tasks
+        return {"status": "success", "message": "Plot generation tasks dispatched"}
+    except Exception as e:
+        error_msg = f"An error occurred during workflow initiation: {str(e)}"
+        print(error_msg)
+        print(traceback.format_exc())
+        send_websocket_message(connection_id, {
+            "status": "workflow_error",
+            "filename": csv_key,
+            "message": error_msg
+        })
+        return {"status": "error", "message": error_msg}
 
 @app.route('/process-csv', methods=['POST', 'OPTIONS'])
 def process_csv_endpoint():
     if request.method == 'OPTIONS':
         return '', 204
+
     try:
         body = request.json
         if not body or 'csv_filename' not in body or 'connection_id' not in body:
@@ -211,31 +237,19 @@ def process_csv_endpoint():
         connection_id = body['connection_id']
     except Exception as e:
         return jsonify(error=f'Invalid request body: {str(e)}'), 400
+
     try:
-        send_websocket_message(connection_id, {
-            "status": "initiated",
-            "filename": csv_key,
-            "message": "CSV processing tasks initiated. You will receive updates via WebSocket."
-        })
-        scatter_task_id = process_csv_and_scatter_plot(csv_key, connection_id)
-        bar_task_id = process_csv_and_bar_plot(csv_key, connection_id)
-        assemble_plots_and_notify(csv_key, connection_id, scatter_task_id, bar_task_id)
+        # start_plot_generation_workflow is now responsible for dispatching individual plot tasks
+        # and it will handle initial WebSocket notification.
+        start_plot_generation_workflow(csv_key, connection_id)
+
         return jsonify({
-            "message": "CSV processing tasks initiated. Final notification will be via WebSocket.",
+            "message": "Plot generation workflow dispatched. Updates will be sent via WebSocket.",
             "csv_key": csv_key,
-            "connection_id": connection_id,
-            "scatter_task_id": str(scatter_task_id),
-            "bar_task_id": str(bar_task_id)
+            "connection_id": connection_id
         }), 202
     except Exception as e:
-        print(f"Error initiating tasks: {e}")
-        if connection_id:
-             send_websocket_message(connection_id, {
-                "status": "error_initiation",
-                "filename": csv_key,
-                "message": f"Could not initiate processing tasks: {str(e)}"
-            })
-        return jsonify(error=f'Could not initiate processing tasks: {str(e)}'), 500
+        return jsonify(error=f'Failed to submit plot generation workflow: {str(e)}'), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
