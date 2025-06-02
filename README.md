@@ -1,3 +1,20 @@
+# AWS Lambda WebSocket + S3 Plot Demo
+
+This project demonstrates a full-stack serverless architecture using AWS Lambda, API Gateway (REST and WebSocket), S3, and a React frontend. Users can upload a CSV file, trigger asynchronous plot generation (scatter and bar plots) via Lambda, and receive real-time updates and plot images through a WebSocket connection. The backend is implemented in Python (Flask/Zappa for REST, Lambda handlers for WebSocket), and the frontend is a modern React app styled with Bootstrap.
+
+**Key Features:**
+- Upload CSV files to S3 via a presigned URL.
+- Trigger Lambda functions to generate scatter and bar plots from the uploaded CSV.
+- Receive real-time status and plot URLs via WebSocket.
+- View generated plots directly in the web UI.
+- Fully serverless and scalable, using AWS SAM/CloudFormation for deployment.
+
+**Test the App:**
+- Website: [http://static-web-bucket-websocket-s3-demo.s3-website-us-east-1.amazonaws.com/](http://static-web-bucket-websocket-s3-demo.s3-website-us-east-1.amazonaws.com/)
+- Test CSV file: [mixed_plot_data.csv](https://github.com/cenizastevie/lambda_web_socket_demo/blob/main/zappa_flask_demo/mixed_plot_data.csv)
+
+---
+
 # AWS SAM Deployment Instructions
 
 ## Prerequisites
